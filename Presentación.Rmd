@@ -1,0 +1,378 @@
+---
+title: "EMC"
+author: "Antonio Pabon Palacio"
+date: ''
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, fig.align = "center", fig.height = 3.2, fig.pos = "H")
+```
+
+```{r echo=FALSE, fig.align='center', fig.cap='', out.width="60%"}
+#knitr::include_graphics("Punto2.png")
+```
+
+```{r echo=FALSE}
+
+```
+
+
+
+
+
+"La Encuesta Mensual de Comercio (EMC) proporciona los principales indicadores sobre la evolución de la actividad comercial del país, por medio de resultados del comercio al por menor y de vehículos, al generar información sobre variables como ventas, personal ocupado y sueldos y salarios."
+
+Esta encuesta hace parte de la investigación del DANE sobre el sector comercial en el país, el cual es de gran importancia e impacto sobre el Producto Interno Bruto (PIB), debido al empleo que genera y la cantidad de bienes que circulan en el sector. El DANE con esta investigación vela por la representitividad de la información generada, aplica clasificaciones internacionales vigentes (puntualmente la
+Clasificación Industrial Internacional Uniforme – CIIU*), mayor eficiencia en el operativo de campo, ampliar la cobertura de información por ciudades, entre otros.
+
+En la base de datos, nos vamos a encontrar con índices de ventas en valores nominales (valores asignados a un bien sin tener en cuenta la inflación o las condiciones de mercado), índices de ventas en valores reales; ambos adaptados a Colombia y con la clasificación CIIU, índices empalmados del personal por categorías de contratación, índices empalmados del salario percápita, entre otros. En nuestro caso, tomaremos los índices empalmados de las ventas en valores reales por líneas de mercancía de la EMC.
+
+*CIIU REV.3 A.C.: Clasificación Industrial Internacional Uniforme de todas las actividades
+económicas, revisión 3, adaptada para Colombia.
+
+
+```{r, include=FALSE}
+require(tidyverse)
+require(magrittr)
+require(readxl)
+require(tsoutliers)
+require(forecast)
+require(lmtest)
+require(tseries)
+require(TSstudio)
+require(TSA)
+require(lubridate)
+require(zoo)
+```
+
+
+
+
+
+
+### Lectura de datos ###
+
+Como fue antes mencionado, se tomaron los índices empalmados de las ventas en valores reales por líneas de mercancía de la EMC, allí nos encontramos con información desde enero del 2013 hasta julio del 2022. Además, algunas de las categorías son:
+
+```{r, include=FALSE}
+bd_ini <- read_excel("D:/ANTONIO/Escritorio/ANTONIO/SERIES DE TIEMPO/Parcial 4/anexo-EMC-total-nacional-comercio-al-por-menor-ago22.xls",
+                     sheet="1.2", skip = 6)
+bd_ini %<>% rename("Alimentos"="1. Alimentos (víveres en general) y bebidas no alcohólicas")
+Alimentos <- data.frame(Fecha=seq(as.Date("2013/1/1"),
+                                 as.Date("2022/7/1"), "months"),
+                       Alimentos=bd_ini[1:115, 7])
+top<-head(bd_ini)
+
+```
+
+
+
+```{r,echo=FALSE}
+knitr::kable(top, "simple")
+```
+
+
+
+Vemos una categoría nombrada "Alimentos", su nombre original es "1. Alimentos (víveres en general) y bebidas no alcohólicas", esta fue elegida ya que es una de las principales componentes de la canasta básica en Colombia, recordemos que la canasta básica incluye todas las categorías de esta encuesta (alimentos, bebidas alcohólicas, ropa, clazado, productos farmacéuticos, entre otros) junto a algunas extra; como la hotelería y servicios por ejemplo.
+
+
+
+### Serie de tiempo ###
+
+
+A continuación, se presenta la serie de tiempo elegida:
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+Alimentos %>% ggplot(aes(x=Fecha, y=Alimentos))+
+  geom_line(col="blue")
+```
+
+
+Veamos la ACF y PACF de la serie:
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="100%", fig.height=5  }
+par(mfrow=c(1,2))
+acf(Alimentos$Alimentos, lag.max=36)
+pacf(Alimentos$Alimentos, lag.max=36)
+```
+
+
+En la ACF observamos el decaimiento lento, por lo que puede ser una señal de que se debe aplicar una diferencia, ademas en los lags 12, 24, 36 vemos una tendencia, parecen unos picos con decaimiento lo cual nos quiere decir que es una serie mensual. En cuanto a la PACF no parece haber un patron estacional. Veamos un modelo global con la funcion auto.arima, usando todos los datos:
+
+
+```{r, include=FALSE}
+ts_alimentos <- ts(Alimentos$Alimentos, start=c(2013,1),
+                frequency = 12)
+modelo1_alimentos <- auto.arima(ts_alimentos,
+                          stepwise = FALSE,
+                          approximation = FALSE)
+```
+
+
+```{r, echo=FALSE  }
+summary(modelo1_alimentos)
+```
+
+
+```{r echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+checkresiduals(modelo1_alimentos)
+```
+
+
+```{r, echo=FALSE  }
+shapiro.test(modelo1_alimentos$residuals)
+jarque.bera.test(modelo1_alimentos$residuals)
+
+```
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+qqnorm(modelo1_alimentos$residuals)
+qqline(modelo1_alimentos$residuals)
+```
+
+
+Como era de esperarse obtuvimos una parte estacional. Pero recordemos que este es el modelo general, realicemos un Back-Testing con tiempo de entrenamiento desde enero del 2013 hasta julio del 2021 y el periodo de prueba desde agosto del 2021 hasta julio del 2022.
+
+
+### Modelos ###
+
+
+```{r, include=FALSE}
+alimentos_partitions <- ts_split(ts_alimentos, sample.out = 12)
+train <- alimentos_partitions$train
+test <- alimentos_partitions$test
+
+ts_info(train)
+ts_info(test)
+```
+
+
+- Modelo 1: auto.arima
+
+
+
+```{r, echo=FALSE  }
+modelo1.train <- auto.arima(train, stepwise = FALSE,
+                            approximation = FALSE)
+modelo1.train
+```
+
+
+```{r,echo=FALSE  }
+fore1 <- forecast(modelo1.train, h=12)
+accuracy(fore1, test)
+```
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+test_forecast(actual = ts_alimentos, forecast.obj = fore1,
+              test = test)
+```
+
+
+- Modelo 2: naive
+
+
+```{r, echo=FALSE  }
+naive_model1 <- naive(train, h = 12)
+test_forecast(actual = ts_alimentos,
+              forecast.obj = naive_model1,
+              test = test)
+
+accuracy(naive_model1, test)
+```
+
+
+- Modelo 3: snaive
+
+
+```{r,echo=FALSE  }
+snaive_model1 <- snaive(train, h = 12)
+test_forecast(actual = ts_alimentos,
+              forecast.obj = snaive_model1,
+              test = test)
+
+accuracy(snaive_model1, test)
+```
+
+
+- Modelo 4: HW
+
+
+```{r,echo=FALSE  }
+modelo_hw <- HoltWinters(train)
+modelo_hw
+
+fore_hw <- forecast(modelo_hw, h = 12)
+fore_hw
+accuracy(fore_hw, test)
+```
+
+
+```{r,echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+test_forecast(ts_alimentos, forecast.obj = fore_hw,
+              test = test)
+```
+
+
+Veamos que los más parejos son el modelo 1 (ARIMA(1,0,0)(0,1,1)[12]) y el modelo 4 (Holt-Winters), si comparamos sus medias como MAE, MAPE y RMSE en su parte de entrenamiento no hay mayores diferencias entre los modelos, en cuanto a la parte de la prueba hay unas pequeñas diferencias siento el H-W un poco mejor, pero a este modelo no le podemos calcular un AIC o un BIC para poder comparar si su modelación en la fase de entrenamiento es mejor.
+
+Sin embargo, vemos que en marzo del 2020 hay un pico, esto puede deberse a la pandemia, por lo que se escogerá el modelo ARIMA(1,0,0)(0,1,1)[12], mostraremos su diagnóstico y luego veremos si ese dato outlier puede afectar en la modelación.
+
+
+
+### Modelo ARIMA(1,0,0)(0,1,1)[12] ###
+
+
+
+```{r,echo=FALSE  }
+modelo1.train
+```
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5}
+checkresiduals(modelo1.train)
+```
+
+
+```{r, echo=FALSE}
+shapiro.test(modelo1.train$residuals)
+jarque.bera.test(modelo1.train$residuals)
+
+```
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5}
+qqnorm(modelo1.train$residuals)
+qqline(modelo1.train$residuals)
+```
+
+
+Para el test de Ljung-Box obtenemos un $vp>0.05$ por lo que no rechazamos la hipótesis nula y eso nos quiere decir que no hay autocorrelación en los residuales.
+
+En cuanto a la Normalidad, los test de Shapiro-Wilk y Jarque-Bera nos dan un $vp<0.05$ lo cual nos indicaría la no normalidad, gráficamente vemos un sector grande que se ajusta a la línea de normalidad, sin embargo el extremo izquierdo parece estar muy desviado.
+
+
+
+### Ajustes ###
+
+
+Recordemos que mencionamos un dato outlier en marzo del 2020, comprobemos que efectivamente este es el dato outlier y si debemos modificarlo. Para ello, usaremos la funcion *tso* y probamos varios valores de delta, el que nos arrojó el AIC más bajo (este fue el criterio de decisión) fue $\delta=0.55$, así:
+
+
+```{r,echo=FALSE}
+modelo_resultante <- tso(train, delta=0.1)
+modelo_resultante
+```
+
+
+```{r,echo=FALSE}
+#ljungbox1[2]
+modelo_resultante$fit %>% coeftest()
+```
+
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+checkresiduals(modelo_resultante$fit)
+```
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+qqnorm(modelo_resultante$fit$residuals)
+qqline(modelo_resultante$fit$residuals)
+```
+
+
+```{r,echo=FALSE}
+shapiro.test(modelo_resultante$fit$residuals)
+jarque.bera.test(modelo_resultante$fit$residuals)
+```
+
+
+### Predicciones ###
+
+
+```{r,echo=FALSE}
+npred <- 12
+
+# Para el modelo 1:
+fore1 <- forecast(modelo1.train, h=npred)
+
+
+# Para el modelo 2:
+newxreg <- outliers.effects(modelo_resultante$outliers,
+length(train) + npred)
+newxreg <- ts(newxreg[-seq_along(train),],
+start = 2021)
+fore2 <- forecast(modelo_resultante$fit, h=npred,
+xreg = newxreg)
+
+```
+
+
+```{r,echo=FALSE}
+accuracy(fore1, test)
+accuracy(fore2, test)
+```
+
+
+Al comparar las predicciones de ambos modelos observamos que el modelo 1 que incluye a marzo del 2020 tiene mejores valores en el MAE, MAPE y RSME en la fase de test, por lo que estas predicciones están más cercanas a la realidad. Si observamos la fase de entrenamiento no hay mucha diferencia en sus resultados del MAE, MAPE y RMSE. Pero veamos gráficamente lo que sucede:
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+df_train <- data.frame(fecha=Alimentos$Fecha[1:length(train)],
+                       real=Alimentos$Alimentos[1:length(train)],
+                       pred1 = modelo1.train$fitted,
+                       pred2 = modelo_resultante$fit$fitted)
+
+df_train %>% ggplot(aes(x=fecha, y=real), col="black")+
+geom_line()+
+geom_line(aes(x=fecha, y=pred1),col="blue", lty=2)+
+geom_line(aes(x=fecha, y=pred2),col="red", lty=3)
+
+```
+
+
+Inicialmente los ajustes en la fase de entrenamiento parecen ser muy similares, donde el modelo con *tso* ajusta un poco mejor en ciertos valores extremos, pero no hay mucha diferencia entre los ajustes de los modelos.
+
+
+```{r, echo=FALSE, fig.align='center', fig.cap='', out.width="60%", fig.height=5  }
+df_test<- data.frame(fecha=Alimentos$Fecha[104:115],
+                     real=Alimentos$Alimentos[104:115],
+                     pred1 = fore1$mean, pred2 = fore2$mean,
+                     li1=fore1$lower[,2], ls1=fore1$upper[,2],
+                     li2=fore2$lower[,2], ls2=fore2$upper[,2])
+
+
+df_test %>% ggplot(aes(x=fecha, y=real), col="black")+
+geom_line()+
+geom_line(aes(x=fecha, y=pred1),col="blue")+
+geom_line(aes(x=fecha, y=li1),col="blue", lty=2)+
+geom_line(aes(x=fecha, y=ls1),col="blue", lty=2)+
+geom_line(aes(x=fecha, y=pred2),col="red")+
+geom_line(aes(x=fecha, y=li2),col="red", lty=3)+
+geom_line(aes(x=fecha, y=ls2),col="red", lty=3)
+
+```
+
+
+Por otro lado, si vemos las predicciones el modelo con *tso* ajusta por debajo de la realidad, con unos intervalos más pequeños en amplitud en comparación al modelo 1, además, el límite superior del modelo con *tso* parece estar muy cercano de la realidad, por lo que en un futuro este intervalo de predicción probablemente no incluya a los valores reales como podemos observar en los medes de abril, mayo, junio y julio del 2022. Sin embargo, el modelo 1 contiene entre su intervalo de predicción en todo momento a los valores reales, pero vemos que sus predicciónes están por encima siempre de los valores reales.
+
+
+
+### Conclusiones ###
+Finalmente, el modelo a escoger para la serie de tiempo sobre la EMC en la categoría de Alimentos (víveres en general) y bebidas no alcohólicas será un ARIMA(1,0,0)(0,1,1)[12] con deriva. 
+Vimos que puden haber otros modelos con mejor ajuste pero peor pronóstico como lo fue el modelo Holt-Winters y el modelo modificado. Es claro gráficamente que en marzo del 2020 hubo un pico en los índices y probablemente es debido a la pandemia, pero los modelos globales parecen no explicar muy bien este cambio.
+Se recomienda una valoración con un experto para validar que tipo de predicción es mejor para estos indicadores de la EMC, para así poder confirmar si es preferible sobreparametrizar o subparametrizar y de esta manera confirmar la selección del modelo según las predicciones.
+
+
+
+
+
